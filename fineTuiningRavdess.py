@@ -42,8 +42,11 @@ from transformers import (
 # =========================================================
 SCRATCH = os.environ.get("SCRATCH", "/tmp")
 HF_CACHE = os.path.join(SCRATCH, "huggingface_cache")
-DATASET_DIR = os.path.join(SCRATCH, "ravdess_dataset")
+DATASET_DIR = os.path.join(SCRATCH, "ravdess")
 OUTPUT_DIR = os.path.join(SCRATCH, "wav2vec2_checkpoints")
+# Ścieżka do folderu z danymi (rozpakowany ZIP)
+RAVDESS_DIR = os.path.join(DATASET_DIR, "ravdess_audio_only")
+CSV_PATH = os.path.join(RAVDESS_DIR, "ravdess_metadata.csv")
 
 os.makedirs(HF_CACHE, exist_ok=True)
 os.makedirs(DATASET_DIR, exist_ok=True)
@@ -52,6 +55,14 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 # Set Hugging Face cache
 os.environ["HF_HOME"] = HF_CACHE
 os.environ["TRANSFORMERS_CACHE"] = HF_CACHE
+
+
+print("[INFO] Scratch directories configured:")
+print(f"  SCRATCH:       {SCRATCH}")
+print(f"  DATASET_DIR:   {DATASET_DIR}")
+print(f"  HF_CACHE:      {HF_CACHE}")
+print(f"  OUTPUT_DIR:    {OUTPUT_DIR}")
+
 # =========================================================
 # 1. Metric Computation
 # =========================================================
@@ -173,21 +184,31 @@ class DataCollatorWithPadding:
 # =========================================================
 # 3. Dataset preparation
 # =========================================================
-dataset = load_dataset("narad/ravdess", cache_dir=DATASET_DIR)
 
-# Convert dataset to train/val/test splits
-df = pd.DataFrame(dataset['train'])  # narad/ravdess ma tylko split "train" w HF
-if "labels" in df.columns:
-    df = df.rename(columns={"labels": "label"})
+print(f"[INFO] Using local dataset from: {RAVDESS_DIR}")
+print(f"[INFO] Loading metadata from: {CSV_PATH}")
 
+# Wczytaj DataFrame
+df = pd.read_csv(CSV_PATH)
+print(f"[INFO] Loaded {len(df)} samples")
+
+# Mapowanie etykiet na ID
 unique_labels = sorted(df["label"].unique())
 label2id = {label: i for i, label in enumerate(unique_labels)}
 id2label = {i: label for label, i in label2id.items()}
 df["label_id"] = df["label"].map(label2id)
 
+print("[INFO] Label mapping:")
+for k, v in label2id.items():
+    print(f"  {k} -> {v}")
+
+# Podział danych
 train_df, temp_df = train_test_split(df, test_size=0.3, stratify=df["label_id"], random_state=42)
 val_df, test_df = train_test_split(temp_df, test_size=0.5, stratify=temp_df["label_id"], random_state=42)
 
+print(f"[INFO] Train/Val/Test sizes: {len(train_df)} / {len(val_df)} / {len(test_df)}")
+
+# Konwersja Pandas → HuggingFace Dataset
 def df_to_hf_dataset(df):
     ds = Dataset.from_pandas(df[["path", "label_id"]])
     ds = ds.rename_column("path", "audio")
@@ -199,11 +220,21 @@ train_ds = df_to_hf_dataset(train_df)
 val_ds = df_to_hf_dataset(val_df)
 test_ds = df_to_hf_dataset(test_df)
 
+print("[INFO] HuggingFace Datasets created successfully:")
+print(f"  Train: {len(train_ds)} samples")
+print(f"  Val:   {len(val_ds)} samples")
+print(f"  Test:  {len(test_ds)} samples")
+
 # =========================================================
 # 4. Processor & preprocessing
 # =========================================================
+from transformers import Wav2Vec2Processor
+
+print("[INFO] Loading Wav2Vec2 processor...")
 processor = Wav2Vec2Processor.from_pretrained("facebook/wav2vec2-base")
 processor.feature_extractor.return_attention_mask = True
+print("[INFO] Processor loaded successfully.")
+
 
 def preprocess_batch(batch):
     audio_arrays = [a["array"] for a in batch["audio"]]
@@ -218,11 +249,11 @@ def preprocess_batch(batch):
     batch["input_values"] = inputs["input_values"]
     batch["attention_mask"] = inputs["attention_mask"]
     return batch
-
+print("/n Start processing")
 train_ds = train_ds.map(preprocess_batch, batched=True, batch_size=2, remove_columns=["audio"])
 val_ds = val_ds.map(preprocess_batch, batched=True, batch_size=2, remove_columns=["audio"])
 test_ds = test_ds.map(preprocess_batch, batched=True, batch_size=2, remove_columns=["audio"])
-
+print("Finished processing")
 data_collator = DataCollatorWithPadding(processor=processor, padding=True)
 
 dataset_dict = {
@@ -234,6 +265,7 @@ dataset_dict = {
 # =========================================================
 # 5. Model initialization
 # =========================================================
+print("[INFO] Initializing Wav2Vec2 model...")
 model = Wav2Vec2ForSequenceClassification.from_pretrained(
     "facebook/wav2vec2-base",
     num_labels=len(label2id),
@@ -243,52 +275,16 @@ model = Wav2Vec2ForSequenceClassification.from_pretrained(
     hidden_dropout=0.1,
     mask_time_prob=0.05
 )
+print("[INFO] Model initialized.")
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 model.to(device)
-print(f"Using device: {device}")
+print(f"[INFO] Using device: {device}")
 
 # =========================================================
 # 6. Training setup
 # =========================================================
-training_args = TrainingArguments(
-    output_dir=OUTPUT_DIR,
-    evaluation_strategy="epoch",
-    save_strategy="epoch",
-    save_total_limit=3,
-    learning_rate=1e-4,
-    lr_scheduler_type="reduce_lr_on_plateau",
-    per_device_train_batch_size=2,
-    per_device_eval_batch_size=2,
-    num_train_epochs=50,
-    load_best_model_at_end=True,
-    metric_for_best_model="balanced_accuracy",
-    greater_is_better=True,
-    logging_dir=os.path.join(OUTPUT_DIR, "logs"),
-    logging_strategy="epoch",
-    report_to="none",
-    seed=42,
-    fp16=torch.cuda.is_available(),
-)
-
-def compute_metrics(eval_pred):
-    logits, labels = eval_pred
-    y_pred = np.argmax(logits, axis=1)
-    metrics = compute_ser_metrics(
-        y_true=labels,
-        y_pred=y_pred,
-        y_score=logits,
-        labels=list(range(len(label2id))),
-    )
-    return {
-        "accuracy": metrics["accuracy"],
-        "balanced_accuracy": metrics["balanced_accuracy"],
-        "f1_macro": metrics["f1_macro"],
-        "mcc": metrics["mcc"],
-        "auc_macro": metrics["auc_macro"],
-        "mAP_macro": metrics["mAP_macro"],
-    }
-
+print("[INFO] Setting up Trainer...")
 trainer = Trainer(
     model=model,
     args=training_args,
@@ -299,44 +295,23 @@ trainer = Trainer(
     compute_metrics=compute_metrics,
     callbacks=[EarlyStoppingCallback(early_stopping_patience=5)],
 )
+print("[INFO] Trainer is ready.")
 
 # =========================================================
 # 7. Training
 # =========================================================
+print("[INFO] Starting training...")
 trainer.train()
+print("[INFO] Training finished.")
 
 # =========================================================
 # 8. Evaluation & saving metrics
 # =========================================================
-def metrics_to_dataframe(metrics):
-    rows = [{
-        "label": "GLOBAL",
-        "accuracy": metrics["accuracy"],
-        "balanced_accuracy": metrics["balanced_accuracy"],
-        "f1_macro": metrics["f1_macro"],
-        "mcc": metrics["mcc"],
-        "auc_macro": metrics["auc_macro"],
-        "mAP_macro": metrics["mAP_macro"],
-    }]
-    for lab, per in metrics["per_class"].items():
-        rows.append({
-            "label": lab,
-            "precision": per["precision"],
-            "recall": per["recall"],
-            "f1": per["f1"],
-            "specificity": per["specificity"],
-            "AP": per["AP"],
-            "AUC": per["AUC"],
-            "TP": per["TP"],
-            "FP": per["FP"],
-            "TN": per["TN"],
-            "FN": per["FN"],
-        })
-    return pd.DataFrame(rows)
-
+print("[INFO] Starting evaluation on train/val/test splits...")
 for split_name, split_ds in [("train", dataset_dict["train"]),
                              ("val", dataset_dict["validation"]),
                              ("test", dataset_dict["test"])]:
+    print(f"[INFO] Predicting on {split_name} split...")
     preds = trainer.predict(split_ds)
     logits, labels = preds.predictions, preds.label_ids
     y_pred = np.argmax(logits, axis=1)
@@ -347,11 +322,16 @@ for split_name, split_ds in [("train", dataset_dict["train"]),
         y_score=logits,
         labels=list(range(len(label2id))),
     )
+    print(f"[INFO] Computed metrics for {split_name} split.")
 
     df_metrics = pd.DataFrame(metrics_to_dataframe(metrics))
-    df_metrics.to_csv(
-        os.path.join(OUTPUT_DIR, f"wav2vec2_{split_name}_metrics.csv"), index=False
-    )
+    metrics_csv_path = os.path.join(OUTPUT_DIR, f"wav2vec2_{split_name}_metrics.csv")
+    df_metrics.to_csv(metrics_csv_path, index=False)
+    print(f"[INFO] Saved metrics CSV: {metrics_csv_path}")
 
-    with open(os.path.join(OUTPUT_DIR, f"wav2vec2_{split_name}_summary.json"), "w") as f:
+    summary_json_path = os.path.join(OUTPUT_DIR, f"wav2vec2_{split_name}_summary.json")
+    with open(summary_json_path, "w") as f:
         json.dump(metrics, f, indent=2)
+    print(f"[INFO] Saved metrics JSON: {summary_json_path}")
+
+print("[INFO] All evaluation finished successfully.")
