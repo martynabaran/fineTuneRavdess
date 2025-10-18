@@ -1,6 +1,3 @@
-Oto **zaktualizowana, szczegółowa instrukcja krok po kroku** do uruchomienia testów skryptu `fineTuningRavdess.py` na PLGrid, z naniesionymi zmianami wynikającymi z analizy Twojego ostatecznego skryptu. Wskazuję też miejsca, gdzie oryginalna instrukcja pozostaje zgodna, a gdzie warto wprowadzić poprawki.
-
----
 
 ### **Krok 1: Logowanie na PLGrid**
 
