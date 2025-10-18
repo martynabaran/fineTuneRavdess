@@ -42,7 +42,7 @@ from transformers import (
 # =========================================================
 SCRATCH = os.environ.get("SCRATCH", "/tmp")
 HF_CACHE = os.path.join(SCRATCH, "huggingface_cache")
-DATASET_DIR = os.path.join(SCRATCH, "ravdess_dataset")
+DATASET_DIR = os.path.join(SCRATCH, "ravdess")
 OUTPUT_DIR = os.path.join(SCRATCH, "wav2vec2_checkpoints")
 # Ścieżka do folderu z danymi (rozpakowany ZIP)
 RAVDESS_DIR = os.path.join(DATASET_DIR, "ravdess_audio_only")
