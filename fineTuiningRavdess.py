@@ -40,12 +40,19 @@ from transformers import (
 # =========================================================
 # 0. PLGRID SCRATCH PATHS
 # =========================================================
-SCRATCH = os.environ.get("SCRATCH", "/tmp")
+import os
+
+# =========================================================
+# 0. PLGRID SCRATCH PATHS
+# =========================================================
+# Jeśli jest MEMFS (RAM disk), użyj go; inaczej standardowy SCRATCH
+SCRATCH = os.environ.get("MEMFS", os.environ.get("SCRATCH", "/tmp"))
 HF_CACHE = os.path.join(SCRATCH, "huggingface_cache")
 DATASET_DIR = os.path.join(SCRATCH, "ravdess")
 OUTPUT_DIR = os.path.join(SCRATCH, "wav2vec2_checkpoints")
+DATASET_DIR2 = os.path.join(os.environ.get("SCRATCH", "/tmp"), "ravdess")
 # Ścieżka do folderu z danymi (rozpakowany ZIP)
-RAVDESS_DIR = os.path.join(DATASET_DIR, "ravdess_audio_only")
+RAVDESS_DIR = os.path.join(DATASET_DIR2, "ravdess_audio_only")
 CSV_PATH = os.path.join(RAVDESS_DIR, "ravdess_metadata.csv")
 
 os.makedirs(HF_CACHE, exist_ok=True)
@@ -55,7 +62,6 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 # Set Hugging Face cache
 os.environ["HF_HOME"] = HF_CACHE
 os.environ["TRANSFORMERS_CACHE"] = HF_CACHE
-
 
 print("[INFO] Scratch directories configured:")
 print(f"  SCRATCH:       {SCRATCH}")
@@ -181,6 +187,21 @@ class DataCollatorWithPadding:
         batch["labels"] = torch.tensor([f["label"] for f in features], dtype=torch.long)
         return batch
 
+
+# class DataCollatorAudio:
+#     def __init__(self, processor):
+#         self.processor = processor
+
+#     def __call__(self, batch):
+#         audio_arrays = [item["audio"]["array"] for item in batch]
+#         sampling_rate = batch[0]["audio"]["sampling_rate"]
+#         inputs = self.processor(audio_arrays, sampling_rate=sampling_rate, padding=True, return_tensors="pt")
+#         labels = torch.tensor([item["label"] for item in batch], dtype=torch.long)
+#         inputs["labels"] = labels
+#         return inputs
+
+
+
 # =========================================================
 # 3. Dataset preparation
 # =========================================================
@@ -256,6 +277,8 @@ test_ds = test_ds.map(preprocess_batch, batched=True, batch_size=2, remove_colum
 print("Finished processing")
 data_collator = DataCollatorWithPadding(processor=processor, padding=True)
 
+
+# data_collator = DataCollatorAudio(processor)
 dataset_dict = {
     "train": train_ds,
     "validation": val_ds,
@@ -273,12 +296,53 @@ model = Wav2Vec2ForSequenceClassification.from_pretrained(
     id2label=id2label,
     attention_dropout=0.1,
     hidden_dropout=0.1,
-    mask_time_prob=0.05
+    mask_time_prob=0.05,
+    gradient_checkpointing=True
+)
 )
 print("[INFO] Model initialized.")
+training_args = TrainingArguments(
+    output_dir=OUTPUT_DIR,
+    evaluation_strategy="epoch",
+    save_strategy="epoch",
+    save_total_limit=3,
+    learning_rate=1e-4,
+    lr_scheduler_type="reduce_lr_on_plateau",
+    per_device_train_batch_size=2,
+    per_device_eval_batch_size=2,
+    num_train_epochs=20,
+    load_best_model_at_end=True,
+    metric_for_best_model="balanced_accuracy",
+    greater_is_better=True,
+    logging_dir="./logs",
+    logging_strategy="epoch",
+    report_to="none",
+    seed=42,
+    fp16=torch.cuda.is_available(),
+)
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print(f"Using device: {device}")
 model.to(device)
+
+
+def compute_metrics(eval_pred):
+    logits, labels = eval_pred
+    y_pred = np.argmax(logits, axis=1)
+    metrics = compute_ser_metrics(
+        y_true=labels,
+        y_pred=y_pred,
+        y_score=logits,
+        labels=list(range(len(label2id))),
+    )
+    return {
+        "accuracy": metrics["accuracy"],
+        "balanced_accuracy": metrics["balanced_accuracy"],
+        "f1_macro": metrics["f1_macro"],
+        "mcc": metrics["mcc"],
+        "auc_macro": metrics["auc_macro"],
+        "mAP_macro": metrics["mAP_macro"],
+    }
 print(f"[INFO] Using device: {device}")
 
 # =========================================================
@@ -307,6 +371,32 @@ print("[INFO] Training finished.")
 # =========================================================
 # 8. Evaluation & saving metrics
 # =========================================================
+def metrics_to_dataframe(metrics):
+    """Flatten metrics dict into a table (global + per-class)."""
+    rows = [{
+        "label": "GLOBAL",
+        "accuracy": metrics["accuracy"],
+        "balanced_accuracy": metrics["balanced_accuracy"],
+        "f1_macro": metrics["f1_macro"],
+        "mcc": metrics["mcc"],
+        "auc_macro": metrics["auc_macro"],
+        "mAP_macro": metrics["mAP_macro"],
+    }]
+    for lab, per in metrics["per_class"].items():
+        rows.append({
+            "label": lab,
+            "precision": per["precision"],
+            "recall": per["recall"],
+            "f1": per["f1"],
+            "specificity": per["specificity"],
+            "AP": per["AP"],
+            "AUC": per["AUC"],
+            "TP": per["TP"],
+            "FP": per["FP"],
+            "TN": per["TN"],
+            "FN": per["FN"],
+        })
+    return pd.DataFrame(rows)
 print("[INFO] Starting evaluation on train/val/test splits...")
 for split_name, split_ds in [("train", dataset_dict["train"]),
                              ("val", dataset_dict["validation"]),
