@@ -49,11 +49,14 @@ import os
 SCRATCH = os.environ.get("MEMFS", os.environ.get("SCRATCH", "/tmp"))
 HF_CACHE = os.path.join(SCRATCH, "huggingface_cache")
 DATASET_DIR = os.path.join(SCRATCH, "ravdess")
-OUTPUT_DIR = os.path.join(SCRATCH, "wav2vec2_checkpoints")
-DATASET_DIR2 = os.path.join(os.environ.get("SCRATCH", "/tmp"), "ravdess")
+#OUTPUT_DIR = os.path.join(SCRATCH, "wav2vec2_checkpoints")
+DATASET_DIR2 = os.path.join("/net/tscratch/people/plgmarbar/", "ravdess")
 # Ścieżka do folderu z danymi (rozpakowany ZIP)
-RAVDESS_DIR = os.path.join(DATASET_DIR2, "ravdess_audio_only")
-CSV_PATH = os.path.join(RAVDESS_DIR, "ravdess_metadata.csv")
+RAVDESS_DIR = os.path.join("/net/tscratch/people/plgmarbar/ravdess", "ravdess_audio_only")
+CSV_PATH = os.path.join(RAVDESS_DIR, "ravdess_metadata_clean.csv")
+OUTPUT_DIR = os.path.join("/net/tscratch/people/plgmarbar/ravdess", "wav2vec2_checkpoints")
+OUTPUT_DIR_PERSISTENT=OUTPUT_DIR
+os.makedirs(OUTPUT_DIR_PERSISTENT, exist_ok=True)
 
 os.makedirs(HF_CACHE, exist_ok=True)
 os.makedirs(DATASET_DIR, exist_ok=True)
@@ -230,16 +233,20 @@ val_df, test_df = train_test_split(temp_df, test_size=0.5, stratify=temp_df["lab
 print(f"[INFO] Train/Val/Test sizes: {len(train_df)} / {len(val_df)} / {len(test_df)}")
 
 # Konwersja Pandas → HuggingFace Dataset
-def df_to_hf_dataset(df):
-    ds = Dataset.from_pandas(df[["path", "label_id"]])
-    ds = ds.rename_column("path", "audio")
+def df_to_hf_dataset(df, base_dir):
+
+    df = df.copy()
+    df["full_path"] = df["path"].apply(lambda x: os.path.join(base_dir, x))
+
+    ds = Dataset.from_pandas(df[["full_path", "label_id"]])
+    ds = ds.rename_column("full_path", "audio")
     ds = ds.rename_column("label_id", "label")
     ds = ds.cast_column("audio", Audio(sampling_rate=16000))
     return ds
-
-train_ds = df_to_hf_dataset(train_df)
-val_ds = df_to_hf_dataset(val_df)
-test_ds = df_to_hf_dataset(test_df)
+RAVDESS_DIR2 = "/net/tscratch/people/plgmarbar/ravdess"
+train_ds = df_to_hf_dataset(train_df, RAVDESS_DIR2)
+val_ds = df_to_hf_dataset(val_df, RAVDESS_DIR2)
+test_ds = df_to_hf_dataset(test_df, RAVDESS_DIR2)
 
 print("[INFO] HuggingFace Datasets created successfully:")
 print(f"  Train: {len(train_ds)} samples")
@@ -299,11 +306,11 @@ model = Wav2Vec2ForSequenceClassification.from_pretrained(
     mask_time_prob=0.05,
     gradient_checkpointing=True
 )
-)
+
 print("[INFO] Model initialized.")
 training_args = TrainingArguments(
     output_dir=OUTPUT_DIR,
-    evaluation_strategy="epoch",
+    eval_strategy="epoch",
     save_strategy="epoch",
     save_total_limit=3,
     learning_rate=1e-4,
@@ -415,11 +422,11 @@ for split_name, split_ds in [("train", dataset_dict["train"]),
     print(f"[INFO] Computed metrics for {split_name} split.")
 
     df_metrics = pd.DataFrame(metrics_to_dataframe(metrics))
-    metrics_csv_path = os.path.join(OUTPUT_DIR, f"wav2vec2_{split_name}_metrics.csv")
+    metrics_csv_path = os.path.join(OUTPUT_DIR_PERSISTENT, f"wav2vec2_{split_name}_metrics.csv")
     df_metrics.to_csv(metrics_csv_path, index=False)
     print(f"[INFO] Saved metrics CSV: {metrics_csv_path}")
 
-    summary_json_path = os.path.join(OUTPUT_DIR, f"wav2vec2_{split_name}_summary.json")
+    summary_json_path = os.path.join(OUTPUT_DIR_PERSISTENT, f"wav2vec2_{split_name}_summary.json")
     with open(summary_json_path, "w") as f:
         json.dump(metrics, f, indent=2)
     print(f"[INFO] Saved metrics JSON: {summary_json_path}")
