@@ -191,19 +191,6 @@ class DataCollatorWithPadding:
         return batch
 
 
-# class DataCollatorAudio:
-#     def __init__(self, processor):
-#         self.processor = processor
-
-#     def __call__(self, batch):
-#         audio_arrays = [item["audio"]["array"] for item in batch]
-#         sampling_rate = batch[0]["audio"]["sampling_rate"]
-#         inputs = self.processor(audio_arrays, sampling_rate=sampling_rate, padding=True, return_tensors="pt")
-#         labels = torch.tensor([item["label"] for item in batch], dtype=torch.long)
-#         inputs["labels"] = labels
-#         return inputs
-
-
 
 # =========================================================
 # 3. Dataset preparation
@@ -243,7 +230,9 @@ def df_to_hf_dataset(df, base_dir):
     ds = ds.rename_column("label_id", "label")
     ds = ds.cast_column("audio", Audio(sampling_rate=16000))
     return ds
+    
 RAVDESS_DIR2 = "/net/tscratch/people/plgmarbar/ravdess"
+
 train_ds = df_to_hf_dataset(train_df, RAVDESS_DIR2)
 val_ds = df_to_hf_dataset(val_df, RAVDESS_DIR2)
 test_ds = df_to_hf_dataset(test_df, RAVDESS_DIR2)
@@ -278,14 +267,13 @@ def preprocess_batch(batch):
     batch["attention_mask"] = inputs["attention_mask"]
     return batch
 print("/n Start processing")
-train_ds = train_ds.map(preprocess_batch, batched=True, batch_size=2, remove_columns=["audio"])
-val_ds = val_ds.map(preprocess_batch, batched=True, batch_size=2, remove_columns=["audio"])
-test_ds = test_ds.map(preprocess_batch, batched=True, batch_size=2, remove_columns=["audio"])
+train_ds = train_ds.map(preprocess_batch, batched=True, batch_size=4, remove_columns=["audio"])
+val_ds = val_ds.map(preprocess_batch, batched=True, batch_size=4, remove_columns=["audio"])
+test_ds = test_ds.map(preprocess_batch, batched=True, batch_size=4, remove_columns=["audio"])
 print("Finished processing")
 data_collator = DataCollatorWithPadding(processor=processor, padding=True)
 
 
-# data_collator = DataCollatorAudio(processor)
 dataset_dict = {
     "train": train_ds,
     "validation": val_ds,
@@ -306,18 +294,21 @@ model = Wav2Vec2ForSequenceClassification.from_pretrained(
     mask_time_prob=0.05,
     gradient_checkpointing=True
 )
-
+model.freeze_feature_extractor()
+model.to(device)
 print("[INFO] Model initialized.")
+
+
 training_args = TrainingArguments(
     output_dir=OUTPUT_DIR,
     eval_strategy="epoch",
     save_strategy="epoch",
     save_total_limit=3,
-    learning_rate=1e-4,
-    lr_scheduler_type="reduce_lr_on_plateau",
-    per_device_train_batch_size=2,
-    per_device_eval_batch_size=2,
-    num_train_epochs=20,
+    learning_rate=2e-5,
+    per_device_train_batch_size=8,
+    per_device_eval_batch_size=8,
+    gradient_accumulation_steps=2,
+    num_train_epochs=20,,
     load_best_model_at_end=True,
     metric_for_best_model="balanced_accuracy",
     greater_is_better=True,
@@ -330,7 +321,7 @@ training_args = TrainingArguments(
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
-model.to(device)
+
 
 
 def compute_metrics(eval_pred):
