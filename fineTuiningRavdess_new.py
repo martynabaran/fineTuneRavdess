@@ -387,7 +387,9 @@ if probs.shape[1] > 2:
     for cls in range(probs.shape[1]):
         fpr[cls], tpr[cls], _ = roc_curve(best_labels == cls, probs[:, cls])
         roc_auc[cls] = auc(fpr[cls], tpr[cls])
-        plt.plot(fpr[cls], tpr[cls], label=f"class {cls} AUC={roc_auc[cls]:.2f}")
+        emotion_name = id2label[cls]  # id2label z Twojego wcześniejszego mappingu
+        plt.plot(fpr[cls], tpr[cls], label=f"{emotion_name} (AUC={roc_auc[cls]:.2f})")
+        # plt.plot(fpr[cls], tpr[cls], label=f"class {cls} AUC={roc_auc[cls]:.2f}")
 
 else:  # binary
     fpr, tpr, _ = roc_curve(best_labels, probs[:, 1])
@@ -405,5 +407,6 @@ roc_path = os.path.join(OUTPUT_DIR, "roc", "roc_best_epoch.png")
 plt.savefig(roc_path)
 plt.close()
 print(f"[INFO] ROC curve saved: {roc_path}")
+
 
 
