@@ -57,6 +57,7 @@ CSV_PATH = os.path.join(RAVDESS_DIR, "metadata_with_emotions.csv")
 OUTPUT_DIR = os.path.join("/net/tscratch/people/plgmarbar/ravdess", "wav2vec2_checkpoints")
 OUTPUT_DIR_PERSISTENT=OUTPUT_DIR
 os.makedirs(OUTPUT_DIR_PERSISTENT, exist_ok=True)
+os.makedirs(os.path.join(OUTPUT_DIR, "roc"), exist_ok=True)
 
 os.makedirs(HF_CACHE, exist_ok=True)
 os.makedirs(DATASET_DIR, exist_ok=True)
@@ -175,6 +176,14 @@ def compute_ser_metrics(y_true, y_pred, y_score, labels=None):
         "confusion_matrix": {"labels": labels, "matrix": cm.tolist()},
     }
     return metrics
+import numpy as np
+from sklearn.metrics import balanced_accuracy_score
+
+def compute_metrics_2(eval_pred):
+    logits, labels = eval_pred
+    preds = np.argmax(logits, axis=-1)
+    bal_acc = balanced_accuracy_score(labels, preds)
+    return {"balanced_accuracy": bal_acc}
 
 # =========================================================
 # 2. Data Collator
@@ -346,7 +355,7 @@ model = Wav2Vec2ForSequenceClassification.from_pretrained(
     gradient_checkpointing=True
 )
 model.freeze_feature_extractor()
-model.to(device)
+
 print("[INFO] Model initialized.")
 
 
@@ -372,7 +381,7 @@ training_args = TrainingArguments(
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
-
+model.to(device)
 
 
 def compute_metrics(eval_pred):
@@ -410,7 +419,7 @@ trainer = Trainer(
     eval_dataset=dataset_dict["validation"],
     tokenizer=processor.feature_extractor,
     data_collator=data_collator,
-    compute_metrics=None,
+    compute_metrics=compute_metrics_2,
     callbacks=[EarlyStoppingCallback(early_stopping_patience=5), roc_callback],
 )
 roc_callback.trainer = trainer  # <-- dopinamy callback teraz
