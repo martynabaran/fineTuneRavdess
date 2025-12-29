@@ -160,45 +160,45 @@ class BestEpochRocCollector(TrainerCallback):
         return control
 
     def save_best(self):
-    print("[CALLBACK] save_best() called.")
-
-    if self.best_epoch_data is None:
-        print("[CALLBACK]  No best_epoch_data → nothing to save.")
-        return
-
-    # --- SAFE JSON CONVERSION ---
-    # Konwersja wszystkich numpy → list
-    safe_data = {}
-    for k, v in self.best_epoch_data.items():
-        if hasattr(v, "tolist"):   # numpy, tensors itp.
-            safe_data[k] = v.tolist()
-        else:
-            safe_data[k] = v
-
-    # --- SAVE NUMPY FILES ---
-    print("[CALLBACK] Saving NUMPY files for best epoch...")
-
-    # Save logits/labels only if present
-    if "logits" in self.best_epoch_data:
-        np.save(os.path.join(self.save_dir, "best_logits.npy"), self.best_epoch_data["logits"])
-    if "labels" in self.best_epoch_data:
-        np.save(os.path.join(self.save_dir, "best_labels.npy"), self.best_epoch_data["labels"])
-
-    # --- SAVE JSON ---
-    with open(os.path.join(self.save_dir, "best_epoch.json"), "w") as f:
-        json.dump(safe_data, f, indent=2)
-
-    # --- PRINT SUMMARY ---
-    epoch = safe_data.get("epoch", "-")
-    bal = safe_data.get("balanced_accuracy", None)
-    bal_msg = f"{bal:.4f}" if isinstance(bal, (int, float)) else str(bal)
-
-    print(
-        f"[CALLBACK] BEST EPOCH SAVED:\n"
-        f"    epoch = {epoch}\n"
-        f"    bal_acc = {bal_msg}\n"
-        f"    path = {self.save_dir}"
-    )
+        print("[CALLBACK] save_best() called.")
+    
+        if self.best_epoch_data is None:
+            print("[CALLBACK]  No best_epoch_data → nothing to save.")
+            return
+    
+        # --- SAFE JSON CONVERSION ---
+        # Konwersja wszystkich numpy → list
+        safe_data = {}
+        for k, v in self.best_epoch_data.items():
+            if hasattr(v, "tolist"):   # numpy, tensors itp.
+                safe_data[k] = v.tolist()
+            else:
+                safe_data[k] = v
+    
+        # --- SAVE NUMPY FILES ---
+        print("[CALLBACK] Saving NUMPY files for best epoch...")
+    
+        # Save logits/labels only if present
+        if "logits" in self.best_epoch_data:
+            np.save(os.path.join(self.save_dir, "best_logits.npy"), self.best_epoch_data["logits"])
+        if "labels" in self.best_epoch_data:
+            np.save(os.path.join(self.save_dir, "best_labels.npy"), self.best_epoch_data["labels"])
+    
+        # --- SAVE JSON ---
+        with open(os.path.join(self.save_dir, "best_epoch.json"), "w") as f:
+            json.dump(safe_data, f, indent=2)
+    
+        # --- PRINT SUMMARY ---
+        epoch = safe_data.get("epoch", "-")
+        bal = safe_data.get("balanced_accuracy", None)
+        bal_msg = f"{bal:.4f}" if isinstance(bal, (int, float)) else str(bal)
+    
+        print(
+            f"[CALLBACK] BEST EPOCH SAVED:\n"
+            f"    epoch = {epoch}\n"
+            f"    bal_acc = {bal_msg}\n"
+            f"    path = {self.save_dir}"
+        )
 
 
 
@@ -405,4 +405,5 @@ roc_path = os.path.join(OUTPUT_DIR, "roc", "roc_best_epoch.png")
 plt.savefig(roc_path)
 plt.close()
 print(f"[INFO] ROC curve saved: {roc_path}")
+
 
