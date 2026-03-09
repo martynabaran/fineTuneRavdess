@@ -1,8 +1,6 @@
 
 ### **Krok 1: Logowanie na PLGrid**
 
-✅ Instrukcja zgodna.
-
 ```bash
 ssh login@athena.plgrid.pl
 cd $HOME
@@ -12,7 +10,6 @@ cd $HOME
 
 ### **Krok 2: Skopiowanie repozytorium z GitHub**
 
-✅ Instrukcja zgodna.
 
 ```bash
 git clone https://github.com/uzytkownik/moj_projekt.git
